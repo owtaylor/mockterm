@@ -1,0 +1,279 @@
+"""
+Integration tests for mockterm.
+
+These tests exercise the CLI end-to-end via the Click test runner and real tmux
+sessions.  Each test runs in a temporary directory so that .mockterm files are
+isolated from one another.
+"""
+
+import time
+from collections.abc import Callable
+from pathlib import Path
+
+import pytest
+from click.testing import CliRunner
+
+from mockterm.cli import main
+
+
+@pytest.fixture()
+def invoke(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Callable[..., tuple[int, str]]:
+    """Return a callable that invokes the CLI in a fresh temp directory.
+
+    Usage::
+
+        def test_foo(invoke):
+            code, out = invoke("start", "sleep", "60")
+    """
+    monkeypatch.chdir(tmp_path)
+    runner = CliRunner()
+
+    def _invoke(*args: str) -> tuple[int, str]:
+        result = runner.invoke(main, list(args))
+        return result.exit_code, result.output
+
+    return _invoke
+
+
+# ---------------------------------------------------------------------------
+# start
+# ---------------------------------------------------------------------------
+
+
+class TestStart:
+    def test_start_creates_session(self, invoke: Callable[..., tuple[int, str]], tmp_path: Path) -> None:
+        code, out = invoke("start", "echo", "hello")
+        assert code == 0
+        assert "Started session 'default'" in out
+        assert (tmp_path / ".mockterm").exists()
+
+    def test_start_writes_ini(self, invoke: Callable[..., tuple[int, str]], tmp_path: Path) -> None:
+        invoke("start", "echo", "hello")
+        import configparser
+
+        cfg = configparser.ConfigParser()
+        cfg.read(tmp_path / ".mockterm")
+        assert cfg.has_section("default")
+        assert "tmux_session" in cfg["default"]
+
+    def test_start_replaces_existing_session(self, invoke: Callable[..., tuple[int, str]]) -> None:
+        code1, _ = invoke("start", "sleep", "60")
+        assert code1 == 0
+        code2, out2 = invoke("start", "sleep", "60")
+        assert code2 == 0
+        assert "Started session 'default'" in out2
+
+    def test_start_named_session(self, invoke: Callable[..., tuple[int, str]], tmp_path: Path) -> None:
+        code, out = invoke("start", "-s", "myapp", "sleep", "60")
+        assert code == 0
+        assert "Started session 'myapp'" in out
+        import configparser
+
+        cfg = configparser.ConfigParser()
+        cfg.read(tmp_path / ".mockterm")
+        assert cfg.has_section("myapp")
+
+    def test_multiple_named_sessions_coexist(self, invoke: Callable[..., tuple[int, str]], tmp_path: Path) -> None:
+        invoke("start", "-s", "a", "sleep", "60")
+        invoke("start", "-s", "b", "sleep", "60")
+        import configparser
+
+        cfg = configparser.ConfigParser()
+        cfg.read(tmp_path / ".mockterm")
+        assert cfg.has_section("a")
+        assert cfg.has_section("b")
+
+    def test_start_custom_size(self, invoke: Callable[..., tuple[int, str]]) -> None:
+        code, out = invoke("start", "--size", "80x24", "sleep", "60")
+        assert code == 0
+        assert "80x24" in out
+
+    def test_start_invalid_size(self, invoke: Callable[..., tuple[int, str]]) -> None:
+        code, out = invoke("start", "--size", "badsize", "sleep", "60")
+        assert code != 0
+
+    def teardown_method(self) -> None:  # best-effort cleanup
+        import subprocess
+
+        subprocess.run(
+            ["tmux", "kill-server"],
+            capture_output=True,
+        )
+
+
+# ---------------------------------------------------------------------------
+# cat / head / tail
+# ---------------------------------------------------------------------------
+
+
+class TestCatHeadTail:
+    @pytest.fixture(autouse=True)
+    def _start_session(self, invoke: Callable[..., tuple[int, str]]) -> None:
+        """Start a session running 'printf' to produce known output."""
+        # Print 20 numbered lines and then sleep so the session stays alive
+        invoke(
+            "start",
+            "bash",
+            "-c",
+            'for i in $(seq 1 20); do echo "line $i"; done; sleep 60',
+        )
+        # Give the command a moment to run
+        time.sleep(0.3)
+
+    def test_cat_returns_content(self, invoke: Callable[..., tuple[int, str]]) -> None:
+        code, out = invoke("cat")
+        assert code == 0
+        assert "line 1" in out
+
+    def test_head_returns_first_lines(self, invoke: Callable[..., tuple[int, str]]) -> None:
+        code, out = invoke("head", "-n", "3")
+        assert code == 0
+        lines = [line for line in out.splitlines() if line.strip()]
+        assert len(lines) <= 3
+
+    def test_tail_returns_last_lines(self, invoke: Callable[..., tuple[int, str]]) -> None:
+        code, out = invoke("tail", "-n", "3")
+        assert code == 0
+        lines = [line for line in out.splitlines() if line.strip()]
+        assert len(lines) <= 3
+
+    def test_cat_no_session_exits_nonzero(self, invoke: Callable[..., tuple[int, str]]) -> None:
+        code, _ = invoke("cat", "-s", "nonexistent")
+        assert code != 0
+
+    def teardown_method(self) -> None:
+        import subprocess
+
+        subprocess.run(["tmux", "kill-server"], capture_output=True)
+
+
+# ---------------------------------------------------------------------------
+# grep
+# ---------------------------------------------------------------------------
+
+
+class TestGrep:
+    @pytest.fixture(autouse=True)
+    def _start_session(self, invoke: Callable[..., tuple[int, str]]) -> None:
+        invoke(
+            "start",
+            "bash",
+            "-c",
+            "echo 'hello world'; echo 'foo bar'; echo 'baz'; sleep 60",
+        )
+        time.sleep(0.3)
+
+    def test_grep_finds_pattern(self, invoke: Callable[..., tuple[int, str]]) -> None:
+        code, out = invoke("grep", "hello")
+        assert code == 0
+        assert "hello world" in out
+
+    def test_grep_no_match_exits_1(self, invoke: Callable[..., tuple[int, str]]) -> None:
+        code, _ = invoke("grep", "zzznomatch")
+        assert code == 1
+
+    def test_grep_context_before(self, invoke: Callable[..., tuple[int, str]]) -> None:
+        code, out = invoke("grep", "-B", "1", "foo")
+        assert code == 0
+        assert "hello world" in out  # line before "foo bar"
+        assert "foo bar" in out
+
+    def test_grep_context_after(self, invoke: Callable[..., tuple[int, str]]) -> None:
+        code, out = invoke("grep", "-A", "1", "foo")
+        assert code == 0
+        assert "foo bar" in out
+        assert "baz" in out
+
+    def test_grep_context_C(self, invoke: Callable[..., tuple[int, str]]) -> None:
+        code, out = invoke("grep", "-C", "1", "foo")
+        assert code == 0
+        assert "hello world" in out
+        assert "foo bar" in out
+        assert "baz" in out
+
+    def test_grep_wait_finds_delayed_output(self, invoke: Callable[..., tuple[int, str]]) -> None:
+        """--wait should poll until the pattern appears."""
+        # Restart the session with a deliberate delay before printing the key string
+        invoke("kill")
+        invoke(
+            "start",
+            "bash",
+            "-c",
+            "sleep 1.5; echo 'ready'; sleep 60",
+        )
+        code, out = invoke("grep", "--wait", "-t", "10", "ready")
+        assert code == 0
+        assert "ready" in out
+
+    def test_grep_wait_timeout_exits_1(self, invoke: Callable[..., tuple[int, str]]) -> None:
+        code, _ = invoke("grep", "--wait", "-t", "2", "zzznomatch")
+        assert code == 1
+
+    def teardown_method(self) -> None:
+        import subprocess
+
+        subprocess.run(["tmux", "kill-server"], capture_output=True)
+
+
+# ---------------------------------------------------------------------------
+# send-keys
+# ---------------------------------------------------------------------------
+
+
+class TestSendKeys:
+    @pytest.fixture(autouse=True)
+    def _start_session(self, invoke: Callable[..., tuple[int, str]]) -> None:
+        # Start bash interactively (no prompt noise from PS1)
+        invoke("start", "bash", "--norc", "--noprofile")
+        time.sleep(0.3)
+
+    def test_send_keys_and_read_output(self, invoke: Callable[..., tuple[int, str]]) -> None:
+        invoke("send-keys", "echo greetings", "Enter")
+        time.sleep(0.3)
+        code, out = invoke("grep", "greetings")
+        assert code == 0
+        assert "greetings" in out
+
+    def test_send_ctrl_c(self, invoke: Callable[..., tuple[int, str]]) -> None:
+        """Sending C-c should not crash."""
+        code, _ = invoke("send-keys", "C-c")
+        assert code == 0
+
+    def teardown_method(self) -> None:
+        import subprocess
+
+        subprocess.run(["tmux", "kill-server"], capture_output=True)
+
+
+# ---------------------------------------------------------------------------
+# kill
+# ---------------------------------------------------------------------------
+
+
+class TestKill:
+    def test_kill_removes_section(self, invoke: Callable[..., tuple[int, str]], tmp_path: Path) -> None:
+        invoke("start", "sleep", "60")
+        code, out = invoke("kill")
+        assert code == 0
+        assert "Killed" in out
+        import configparser
+
+        cfg = configparser.ConfigParser()
+        cfg.read(tmp_path / ".mockterm")
+        assert not cfg.has_section("default")
+
+    def test_kill_named_session(self, invoke: Callable[..., tuple[int, str]], tmp_path: Path) -> None:
+        invoke("start", "-s", "myapp", "sleep", "60")
+        invoke("start", "-s", "other", "sleep", "60")
+        invoke("kill", "-s", "myapp")
+        import configparser
+
+        cfg = configparser.ConfigParser()
+        cfg.read(tmp_path / ".mockterm")
+        assert not cfg.has_section("myapp")
+        assert cfg.has_section("other")
+
+    def teardown_method(self) -> None:
+        import subprocess
+
+        subprocess.run(["tmux", "kill-server"], capture_output=True)

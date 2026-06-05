@@ -15,3 +15,14 @@ filing the pull request.
  * ruff
  * GitHub actions for CI
  * tmux as the terminal handling backend
+
+## Running checks locally
+
+Before committing, run the same checks that CI runs:
+
+```sh
+uv run ruff check src/ tests/   # lint
+uv run ruff format --check src/ tests/  # formatting
+uv run pyright                  # type check
+uv run pytest -v                # tests (requires tmux)
+```

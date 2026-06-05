@@ -1,0 +1,42 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mockterm"
+version = "0.1.0"
+description = "Headless terminal utility for AI agents to test TUI programs"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "click>=8.0",
+]
+
+[project.scripts]
+mockterm = "mockterm.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mockterm"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pyright>=1.1",
+    "ruff>=0.9",
+]
+
+[tool.ruff]
+line-length = 120
+indent-width = 4
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[tool.pyright]
+pythonVersion = "3.14"
+include = ["src", "tests"]
+strict = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
