@@ -115,16 +115,22 @@ network_policies:
     - path: /usr/bin/curl
     - path: /usr/bin/wget
     - path: /sandbox/.cursor-server/**
-  github_rest_api:
-    name: github-rest-api
+  github_api:
+    name: github-api
     endpoints:
     - host: api.github.com
       port: 443
       protocol: rest
       tls: terminate
       enforcement: enforce
-      access: read-only
-    binaries:
+      access: read-write
+    - host: api.github.com
+      port: 443
+      path: "/graphql"
+      protocol: graphql
+      tls: terminate
+      enforcement: enforce
+      access: read-write
     - path: /usr/local/bin/claude
     - path: /usr/bin/gh
   github_ssh_over_https:
@@ -142,6 +148,9 @@ network_policies:
       - allow:
           method: POST
           path: /**/git-upload-pack
+      - allow:
+          method: POST
+          path: /**/git-receive-pack
     binaries:
     - path: /usr/bin/git
   nvidia_inference:
