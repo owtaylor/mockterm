@@ -1,0 +1,14 @@
+ARG BASE_IMAGE=ghcr.io/nvidia/openshell-community/sandboxes/base:latest
+FROM ${BASE_IMAGE}
+
+USER root
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends tmux && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY policy.yaml /etc/openshell/policy.yaml
+
+USER sandbox
+
+ENTRYPOINT ["/bin/bash"]

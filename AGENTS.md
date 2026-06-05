@@ -1,0 +1,17 @@
+**NOTE**: CLAUDE.md is a symlink to AGENTS.md, this file. AGENTS.md doesn't need to be
+read or updated separately.
+
+## How to work
+
+As an agent, you expected to work autonomously as part of a team with a human
+programmer. Given a task, try to create a complete change that is ready to be
+filed as a pull request, but stop and let the human review it before actually
+filing the pull request.
+
+## Tech stack
+
+ * uv
+ * pyright
+ * ruff
+ * GitHub actions for CI
+ * tmux as the terminal handling backend
