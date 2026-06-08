@@ -1,0 +1,4 @@
+{
+    "ruff.format.backend": "uv",
+    "editor.defaultFormatter": "charliermarsh.ruff",
+}

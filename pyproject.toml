@@ -7,7 +7,7 @@ name = "mockterm"
 version = "0.1.0"
 description = "Headless terminal utility for AI agents to test TUI programs"
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.10"
 dependencies = [
     "click>=8.0",
 ]
