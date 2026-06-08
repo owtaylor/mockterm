@@ -8,6 +8,7 @@ import time
 
 import click
 
+from mockterm.ansi import sanitize_sgr_slice, strip_sgr
 from mockterm.session import (
     DEFAULT_ID,
     capture_pane,
@@ -18,6 +19,11 @@ from mockterm.session import (
 
 DEFAULT_COLS = 120
 DEFAULT_ROWS = 40
+
+
+# ---------------------------------------------------------------------------
+# parse helper
+# ---------------------------------------------------------------------------
 
 
 def _parse_size(size: str) -> tuple[int, int]:
@@ -75,7 +81,7 @@ def main() -> None:
     \b
     FLAGS COMMON TO cat/head/tail/grep
     ───────────────────────────────────
-    -e / --escape-codes   preserve ANSI escape codes (default: stripped)
+    -e / --escape-codes   output ANSI escape codes (default: stripped).
     """
 
 
@@ -166,6 +172,9 @@ def grep(
 ) -> None:
     """Search the current screen contents for PATTERN.
 
+    PATTERN is matched against the visible text of each line (ANSI escape
+    sequences are stripped before matching, even with -e).
+
     With --wait, polls the screen once per second until a match is found or
     the timeout expires. Exits with status 1 if no match is found.
 
@@ -187,10 +196,14 @@ def grep(
     while True:
         screen = capture_pane(tmux_session, escape_codes=escape_codes)
         lines = screen.splitlines()
-        matched_lines = _grep_lines(lines, pattern, before, after)
+        indices = _grep_indices(lines, pattern, before, after)
 
-        if matched_lines:
-            click.echo("\n".join(matched_lines))
+        if indices:
+            if escape_codes:
+                output_lines = sanitize_sgr_slice(lines, indices)
+            else:
+                output_lines = [lines[i] for i in indices]
+            print("\n".join(output_lines))
             sys.exit(0)
 
         if deadline is None or time.monotonic() >= deadline:
@@ -202,8 +215,12 @@ def grep(
     sys.exit(1)
 
 
-def _grep_lines(lines: list[str], pattern: str, before: int, after: int) -> list[str]:
-    """Return lines surrounding matches (grep-style context)."""
+def _grep_indices(lines: list[str], pattern: str, before: int, after: int) -> list[int]:
+    """Return sorted indices of lines matching pattern, plus before/after context lines.
+
+    Pattern is matched against visible text (SGR sequences stripped) so that
+    colour codes do not interfere with the search.
+    """
     try:
         regex = re.compile(pattern)
     except re.error as e:
@@ -212,11 +229,11 @@ def _grep_lines(lines: list[str], pattern: str, before: int, after: int) -> list
     n = len(lines)
     included: set[int] = set()
     for i, line in enumerate(lines):
-        if regex.search(line):
+        if regex.search(strip_sgr(line)):
             for j in range(max(0, i - before), min(n, i + after + 1)):
                 included.add(j)
 
-    return [lines[i] for i in sorted(included)]
+    return sorted(included)
 
 
 # ---------------------------------------------------------------------------
@@ -264,10 +281,20 @@ def _output_screen(
     screen = capture_pane(tmux_session, escape_codes=escape_codes)
     lines = screen.splitlines()
 
-    if n_lines is not None:
-        lines = lines[-n_lines:] if from_end else lines[:n_lines]
+    total = len(lines)
+    if n_lines is None:
+        selected = list(range(total))
+    elif from_end:
+        selected = list(range(max(0, total - n_lines), total))
+    else:
+        selected = list(range(min(n_lines, total)))
 
-    click.echo("\n".join(lines))
+    if escape_codes:
+        output_lines = sanitize_sgr_slice(lines, selected)
+    else:
+        output_lines = [lines[i] for i in selected]
+
+    print("\n".join(output_lines))
 
 
 @main.command()
