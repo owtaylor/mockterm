@@ -59,13 +59,19 @@ Create a GitHub Fine-Grained Personal Access Token with the following permission
  * Contents: Read and Write
  * Issues: Read and Write
 
-and create a provider for it:
+and create a provider to allow the sandbox to have access to it. The provider uses
+a custom "provider profile" that has been modified compared to the standard one
+to allow read-write access to GitHub. (This requires enabling Providers v2 which
+will eventually become default.)
 
 ```sh
+openshell settings set --global --key providers_v2_enabled --value true --yes
+openshell provider profile import openshell/github-mockterm.yaml
+
 read GITHUB_TOKEN
 # Paste in your token
 export GITHUB_TOKEN
-openshell provider create --name github-mockterm --type github --from-existing
+openshell provider create --name github-mockterm --type github-mockterm --from-existing
 ```
 
 ### Build the custom sandbox container
@@ -77,7 +83,7 @@ podman build -t mockterm-sandbox:latest ./openshell
 ### Create the sandbox
 
 ```sh
-$ openshell sandbox create --name mockterm  --provider github-mockterm --provider vertex-local --from=mockterm-sandbox:latest
+$ openshell sandbox create --name mockterm --from=mockterm-sandbox:latest --provider github-mockterm
 
 Created sandbox:
 

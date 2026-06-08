@@ -1,0 +1,41 @@
+id: github-mockterm
+display_name: GitHub (for mockterm)
+description: GitHub API and Git operations, as needed for mockterm
+category: source_control
+credentials:
+  - name: api_token
+    description: GitHub token
+    env_vars:
+      - GITHUB_TOKEN
+      - GH_TOKEN
+    required: true
+    auth_style: bearer
+    header_name: authorization
+    query_param: ''
+# As compared to the normal github provider, we allow read-write
+# access to all of the GitHub REST/GraphQL API, and count on the
+# restrictions on our private access token
+endpoints:
+  - host: api.github.com
+    port: 443
+    protocol: rest
+    access: read-write
+    enforcement: enforce
+  - host: api.github.com
+    port: 443
+    protocol: graphql
+    access: read-write
+    enforcement: enforce
+    path: /graphql
+  - host: github.com
+    port: 443
+    protocol: rest
+    access: read-write
+    enforcement: enforce
+binaries:
+  - /usr/bin/gh
+  - /usr/bin/git
+inference_capable: false
+discovery:
+  credentials:
+    - api_token
