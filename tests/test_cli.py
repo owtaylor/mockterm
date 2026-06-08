@@ -7,7 +7,7 @@ isolated from one another.
 """
 
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Generator
 from pathlib import Path
 
 import pytest
@@ -277,3 +277,73 @@ class TestKill:
         import subprocess
 
         subprocess.run(["tmux", "kill-server"], capture_output=True)
+
+
+# ---------------------------------------------------------------------------
+# Integration: escape-code sanitization through the CLI
+# ---------------------------------------------------------------------------
+
+
+class TestEscapeCodesSanitized:
+    """Integration tests that verify -e output is self-contained.
+
+    We simulate the vi welcome screen, which has been observed to cause tmux
+    to generate lines ending with open SGR attributes — exactly the leak
+    pattern that _sanitize_sgr_slice must close.
+    """
+
+    # Terminal width must match the mockterm default (DEFAULT_COLS = 120).
+    _COLS = 120
+
+    @classmethod
+    def _make_sgr_content(cls) -> str:
+        """Build synthetic vi-style content with full-width padded lines."""
+        cols = cls._COLS
+
+        def tilde_line() -> str:
+            # Entire line in bright-cyan; trailing spaces keep the colour active.
+            return "\033[94m~" + " " * (cols - 1) + "\n"
+
+        def content_line(text: str, indent: int = 40) -> str:
+            # ~ + indent spaces in bright-cyan, then text in default fg, then
+            # back to bright-cyan to fill to column width.
+            return (
+                "\033[94m~"
+                + " " * (indent - 1)
+                + "\033[39m"
+                + text
+                + "\033[94m"
+                + " " * max(0, cols - indent - len(text))
+                + "\n"
+            )
+
+        return (
+            tilde_line()
+            + content_line("Author: Vim Team")
+            + content_line("type  :q<Enter>  to exit")
+            + tilde_line() * 3
+        )
+
+    @pytest.fixture(autouse=True)
+    def _start_session(self, invoke: Callable[..., tuple[int, str]], tmp_path: Path) -> Generator:
+        output_file = tmp_path / "sgr_output.txt"
+        output_file.write_text(self._make_sgr_content())
+        invoke("start", "-s", "vi-sgr", "sh", "-c", f"cat {output_file} && sleep 3600")
+        time.sleep(0.5)
+        yield
+        invoke("kill", "-s", "vi-sgr")
+
+    def test_cat_e_ends_with_reset(self, invoke: Callable[..., tuple[int, str]]) -> None:
+        _, out = invoke("cat", "-e", "-s", "vi-sgr")
+        assert out.rstrip("\n").endswith("\033[0m")
+
+    def test_grep_e_author_ends_with_reset(self, invoke: Callable[..., tuple[int, str]]) -> None:
+        """The original bug: grep -e on a coloured line leaked an open SGR code."""
+        _, out = invoke("grep", "-e", "-s", "vi-sgr", "Author")
+        assert "Author" in out
+        assert out.rstrip("\n").endswith("\033[0m")
+
+    def test_grep_e_matches_visible_text_not_codes(self, invoke: Callable[..., tuple[int, str]]) -> None:
+        # '94' appears in escape codes in the output; grep should NOT match it.
+        code, _ = invoke("grep", "-e", "-s", "vi-sgr", r"^\d+$")
+        assert code == 1  # no line whose visible text is purely digits
