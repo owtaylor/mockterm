@@ -353,13 +353,6 @@ class TestEscapeCodesSanitized:
 # Integration: --image flag
 # ---------------------------------------------------------------------------
 
-import mockterm.render as render_mod  # noqa: E402
-
-
-def _reset_font_cache() -> None:
-    render_mod._font_searched = False
-    render_mod._cached_family = None
-
 
 class TestImage:
     """Verify that --image writes a PNG and prints its absolute path."""

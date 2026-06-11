@@ -99,19 +99,19 @@ def _fc_list(family: str) -> list[Path]:
 
     Raises FileNotFoundError if the fc-list binary is not installed (allowing
     the caller to fall back to directory search).  Returns [] if fc-list is
-    available but the family is not found.
+    available but the family is not found.  Raises subprocess.TimeoutExpired
+    if fc-list takes longer than 60 s (treated as a fatal error).
     """
-    try:
-        result = subprocess.run(
-            ["fc-list", f":family={family}", "--format", "%{file}\n"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-    except subprocess.TimeoutExpired:
-        return []
-    # FileNotFoundError is not caught here: it propagates to signal that
-    # fc-list is absent and the caller should use directory search instead.
+    # FileNotFoundError and TimeoutExpired are not caught here: they propagate
+    # to the caller.  FileNotFoundError signals that fc-list is absent and
+    # directory search should be used instead.  TimeoutExpired is unexpected
+    # and is allowed to terminate the program.
+    result = subprocess.run(
+        ["fc-list", f":family={family}", "--format", "%{file}\n"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
     return [Path(p) for p in result.stdout.splitlines() if p.strip()]
 
 
