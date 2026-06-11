@@ -10,7 +10,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-from mockterm.ansi import SGR_RE, SgrState, apply_sgr, strip_sgr
+from mockterm.ansi import SGR_RE, SgrState, apply_sgr, sanitize_sgr_slice, strip_sgr
 
 # ─── constants ───────────────────────────────────────────────────────────────
 
@@ -57,9 +57,9 @@ _ANSI16: list[tuple[int, int, int]] = [
 @dataclass(frozen=True)
 class FontFamily:
     regular: Path
-    bold: Path | None
-    oblique: Path | None  # italic / oblique
-    bold_oblique: Path | None  # bold italic / bold oblique
+    bold: Path
+    oblique: Path  # italic / oblique
+    bold_oblique: Path  # bold italic / bold oblique
 
 
 # Priority-ordered list of (fc_family_name, regular, bold, oblique, bold_oblique)
@@ -95,7 +95,12 @@ _SEARCH_DIRS: list[Path] = [
 
 
 def _fc_list(family: str) -> list[Path]:
-    """Return font file paths for *family* via fc-list, or [] if unavailable."""
+    """Return font file paths for *family* via fc-list.
+
+    Raises FileNotFoundError if the fc-list binary is not installed (allowing
+    the caller to fall back to directory search).  Returns [] if fc-list is
+    available but the family is not found.
+    """
     try:
         result = subprocess.run(
             ["fc-list", f":family={family}", "--format", "%{file}\n"],
@@ -103,10 +108,10 @@ def _fc_list(family: str) -> list[Path]:
             text=True,
             timeout=5,
         )
-    except FileNotFoundError:
-        return []
     except subprocess.TimeoutExpired:
         return []
+    # FileNotFoundError is not caught here: it propagates to signal that
+    # fc-list is absent and the caller should use directory search instead.
     return [Path(p) for p in result.stdout.splitlines() if p.strip()]
 
 
@@ -130,30 +135,41 @@ _cached_family: FontFamily | None = None
 
 
 def find_font_family() -> FontFamily | None:
-    """Return the first available monospace FontFamily, or None."""
+    """Return the first available monospace FontFamily, or None.
+
+    Uses fc-list when available (preferred: faster, distro-agnostic).  If
+    fc-list is not installed, falls back to scanning known directory paths.
+    In both cases all four style variants (regular, bold, oblique, bold
+    oblique) must be present; partial installs are skipped.
+    """
     global _font_searched, _cached_family
     if _font_searched:
         return _cached_family
 
     _font_searched = True
-    for fc_family, reg, bold, oblique, boldoblique in _CANDIDATES:
-        fc_files = _fc_list(fc_family)
-        by_name: dict[str, Path] = {p.name: p for p in fc_files}
 
-        def _pick(fname: str, _bn: dict[str, Path] = by_name) -> Path | None:
-            return _bn.get(fname) or _find_in_dirs(fname)
-
-        regular = _pick(reg)
-        if regular is None:
-            continue
-
-        _cached_family = FontFamily(
-            regular=regular,
-            bold=_pick(bold),
-            oblique=_pick(oblique),
-            bold_oblique=_pick(boldoblique),
-        )
-        return _cached_family
+    try:
+        # fc-list is available: use it exclusively, do not search directories.
+        for fc_family, reg, bold, oblique, boldoblique in _CANDIDATES:
+            fc_files = _fc_list(fc_family)  # raises FileNotFoundError if binary absent
+            by_name: dict[str, Path] = {p.name: p for p in fc_files}
+            regular = by_name.get(reg)
+            bold_p = by_name.get(bold)
+            oblique_p = by_name.get(oblique)
+            boldoblique_p = by_name.get(boldoblique)
+            if regular and bold_p and oblique_p and boldoblique_p:
+                _cached_family = FontFamily(regular, bold_p, oblique_p, boldoblique_p)
+                return _cached_family
+    except FileNotFoundError:
+        # fc-list binary not found; fall back to scanning known directories.
+        for _, reg, bold, oblique, boldoblique in _CANDIDATES:
+            regular = _find_in_dirs(reg)
+            bold_p = _find_in_dirs(bold)
+            oblique_p = _find_in_dirs(oblique)
+            boldoblique_p = _find_in_dirs(boldoblique)
+            if regular and bold_p and oblique_p and boldoblique_p:
+                _cached_family = FontFamily(regular, bold_p, oblique_p, boldoblique_p)
+                return _cached_family
 
     return None
 
@@ -164,26 +180,20 @@ def find_font_family() -> FontFamily | None:
 @dataclass(frozen=True)
 class LoadedFonts:
     regular: ImageFont.FreeTypeFont
-    bold: ImageFont.FreeTypeFont  # falls back to regular
-    oblique: ImageFont.FreeTypeFont  # falls back to regular
-    bold_oblique: ImageFont.FreeTypeFont  # falls back to bold
+    bold: ImageFont.FreeTypeFont
+    oblique: ImageFont.FreeTypeFont
+    bold_oblique: ImageFont.FreeTypeFont
     cell_w: int
     cell_h: int
     ascent: int
 
 
 def load_fonts(family: FontFamily, size: int = DEFAULT_FONT_SIZE) -> LoadedFonts:
-    """Load up to four font variants and compute monospace cell dimensions."""
+    """Load all four font variants and compute monospace cell dimensions."""
     regular = ImageFont.truetype(str(family.regular), size)
-
-    def _load(path: Path | None, fallback: ImageFont.FreeTypeFont) -> ImageFont.FreeTypeFont:
-        if path is not None:
-            return ImageFont.truetype(str(path), size)
-        return fallback
-
-    bold = _load(family.bold, regular)
-    oblique = _load(family.oblique, regular)
-    bold_oblique = _load(family.bold_oblique, bold)
+    bold = ImageFont.truetype(str(family.bold), size)
+    oblique = ImageFont.truetype(str(family.oblique), size)
+    bold_oblique = ImageFont.truetype(str(family.bold_oblique), size)
 
     ascent, descent = regular.getmetrics()
     cell_h = ascent + descent
@@ -372,3 +382,24 @@ def save_screenshot(img: Image.Image, command: str, session_id: str, ansi_text: 
     img.save(path, format="PNG")
     path.with_suffix(".ans").write_text(ansi_text, encoding="utf-8")
     return path.resolve()
+
+
+def render_and_save(all_lines: list[str], selected: list[int], command: str, session_id: str) -> str:
+    """Render *selected* screen lines to a PNG and return the absolute path.
+
+    Writes the PNG to .mockterm-images/ alongside a .ans companion file
+    containing the sanitised ANSI text.  Raises SystemExit with a helpful
+    message if no font is available.
+    """
+    family = find_font_family()
+    if family is None:
+        raise SystemExit(
+            "mockterm: no monospace font found.\n"
+            "Install fonts-dejavu-core or fonts-liberation (Ubuntu/Debian)\n"
+            "or dejavu-sans-mono-fonts / liberation-mono-fonts (Fedora/RHEL)."
+        )
+    fonts = load_fonts(family, effective_font_size())
+    img = render_lines(all_lines, selected, fonts)
+    ansi_text = "\n".join(sanitize_sgr_slice(all_lines, selected))
+    path = save_screenshot(img, command, session_id, ansi_text)
+    return str(path)

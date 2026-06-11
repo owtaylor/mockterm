@@ -289,21 +289,10 @@ def send_keys(session_id: str, keys: tuple[str, ...]) -> None:
 
 
 def _render_and_save(all_lines: list[str], selected: list[int], command: str, session_id: str) -> str:
-    """Render *selected* lines to a PNG; return the absolute file path as a string."""
-    from mockterm.render import effective_font_size, find_font_family, load_fonts, render_lines, save_screenshot
+    # Imported lazily so PIL is not loaded when --image is not used.
+    from mockterm.render import render_and_save
 
-    family = find_font_family()
-    if family is None:
-        raise SystemExit(
-            "mockterm: no monospace font found.\n"
-            "Install fonts-dejavu-core or fonts-liberation (Ubuntu/Debian)\n"
-            "or dejavu-sans-mono-fonts / liberation-mono-fonts (Fedora/RHEL)."
-        )
-    fonts = load_fonts(family, effective_font_size())
-    img = render_lines(all_lines, selected, fonts)
-    ansi_text = "\n".join(sanitize_sgr_slice(all_lines, selected))
-    path = save_screenshot(img, command, session_id, ansi_text)
-    return str(path)
+    return render_and_save(all_lines, selected, command, session_id)
 
 
 def _output_screen(

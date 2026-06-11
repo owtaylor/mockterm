@@ -27,17 +27,6 @@ def _reset_font_cache() -> None:
     render_mod._cached_family = None
 
 
-def _have_fonts() -> bool:
-    """Return True if at least one supported font is available on this system."""
-    _reset_font_cache()
-    result = find_font_family()
-    _reset_font_cache()
-    return result is not None
-
-
-SKIP_NO_FONTS = pytest.mark.skipif(not _have_fonts(), reason="no system monospace font found")
-
-
 # ---------------------------------------------------------------------------
 # ansi256_to_rgb
 # ---------------------------------------------------------------------------
@@ -133,15 +122,18 @@ class TestFindFontFamily:
         assert result is None
 
     def test_uses_fc_list_path(self, tmp_path: Path) -> None:
-        fake_regular = tmp_path / "DejaVuSansMono.ttf"
-        fake_regular.touch()
-        fake_bold = tmp_path / "DejaVuSansMono-Bold.ttf"
-        fake_bold.touch()
+        # All four variants must be present for a family to be accepted.
+        fake_files = {
+            "DejaVuSansMono.ttf": tmp_path / "DejaVuSansMono.ttf",
+            "DejaVuSansMono-Bold.ttf": tmp_path / "DejaVuSansMono-Bold.ttf",
+            "DejaVuSansMono-Oblique.ttf": tmp_path / "DejaVuSansMono-Oblique.ttf",
+            "DejaVuSansMono-BoldOblique.ttf": tmp_path / "DejaVuSansMono-BoldOblique.ttf",
+        }
+        for p in fake_files.values():
+            p.touch()
 
         def _fake_fc(family: str) -> list[Path]:
-            if "DejaVu" in family:
-                return [fake_regular, fake_bold]
-            return []
+            return list(fake_files.values()) if "DejaVu" in family else []
 
         with (
             patch("mockterm.render._fc_list", side_effect=_fake_fc),
@@ -149,38 +141,57 @@ class TestFindFontFamily:
         ):
             result = find_font_family()
         assert result is not None
-        assert result.regular == fake_regular
-        assert result.bold == fake_bold
+        assert result.regular == fake_files["DejaVuSansMono.ttf"]
+        assert result.bold == fake_files["DejaVuSansMono-Bold.ttf"]
 
-    def test_falls_back_to_dir_scan(self, tmp_path: Path) -> None:
-        fake_regular = tmp_path / "DejaVuSansMono.ttf"
-        fake_regular.touch()
+    def test_falls_back_to_dir_scan_when_fc_list_absent(self, tmp_path: Path) -> None:
+        # Directory fallback is triggered only when fc-list binary is missing.
+        fake_files = {
+            "DejaVuSansMono.ttf": tmp_path / "DejaVuSansMono.ttf",
+            "DejaVuSansMono-Bold.ttf": tmp_path / "DejaVuSansMono-Bold.ttf",
+            "DejaVuSansMono-Oblique.ttf": tmp_path / "DejaVuSansMono-Oblique.ttf",
+            "DejaVuSansMono-BoldOblique.ttf": tmp_path / "DejaVuSansMono-BoldOblique.ttf",
+        }
+        for p in fake_files.values():
+            p.touch()
 
         def _fake_find(fname: str) -> Path | None:
-            if fname == "DejaVuSansMono.ttf":
-                return fake_regular
-            return None
+            return fake_files.get(fname)
 
         with (
-            patch("mockterm.render._fc_list", return_value=[]),
+            patch("mockterm.render._fc_list", side_effect=FileNotFoundError),
             patch("mockterm.render._find_in_dirs", side_effect=_fake_find),
         ):
             result = find_font_family()
         assert result is not None
-        assert result.regular == fake_regular
+        assert result.regular == fake_files["DejaVuSansMono.ttf"]
+
+    def test_fc_list_available_does_not_fall_back_to_dirs(self) -> None:
+        # When fc-list is available but finds nothing, we do NOT search directories.
+        with (
+            patch("mockterm.render._fc_list", return_value=[]),
+            patch("mockterm.render._find_in_dirs") as mock_find,
+        ):
+            result = find_font_family()
+        assert result is None
+        mock_find.assert_not_called()
 
     def test_result_is_cached(self, tmp_path: Path) -> None:
-        fake_regular = tmp_path / "DejaVuSansMono.ttf"
-        fake_regular.touch()
+        fake_files = {
+            "DejaVuSansMono.ttf": tmp_path / "DejaVuSansMono.ttf",
+            "DejaVuSansMono-Bold.ttf": tmp_path / "DejaVuSansMono-Bold.ttf",
+            "DejaVuSansMono-Oblique.ttf": tmp_path / "DejaVuSansMono-Oblique.ttf",
+            "DejaVuSansMono-BoldOblique.ttf": tmp_path / "DejaVuSansMono-BoldOblique.ttf",
+        }
+        for p in fake_files.values():
+            p.touch()
 
         call_count = 0
 
         def _fake_fc(family: str) -> list[Path]:
             nonlocal call_count
             call_count += 1
-            if "DejaVu" in family:
-                return [fake_regular]
-            return []
+            return list(fake_files.values()) if "DejaVu" in family else []
 
         with (
             patch("mockterm.render._fc_list", side_effect=_fake_fc),
@@ -197,7 +208,6 @@ class TestFindFontFamily:
 
 
 class TestRenderLines:
-    @SKIP_NO_FONTS
     def test_plain_text_dimensions(self) -> None:
         from mockterm.render import DEFAULT_FONT_SIZE, load_fonts
 
@@ -211,7 +221,6 @@ class TestRenderLines:
         expected_w = len("Hello world") * fonts.cell_w
         assert img.size == (expected_w, fonts.cell_h)
 
-    @SKIP_NO_FONTS
     def test_trailing_whitespace_trimmed(self) -> None:
         from mockterm.render import DEFAULT_FONT_SIZE, load_fonts
 
@@ -224,7 +233,6 @@ class TestRenderLines:
 
         assert img.size[0] == 2 * fonts.cell_w
 
-    @SKIP_NO_FONTS
     def test_coloured_fg_affects_pixel(self) -> None:
         from mockterm.render import DEFAULT_FONT_SIZE, load_fonts
 
@@ -245,7 +253,6 @@ class TestRenderLines:
         ]
         assert len(red_pixels) > 0
 
-    @SKIP_NO_FONTS
     def test_empty_selection_gives_single_cell(self) -> None:
         from mockterm.render import DEFAULT_FONT_SIZE, load_fonts
 
@@ -256,7 +263,6 @@ class TestRenderLines:
         img = render_lines([], [], fonts)
         assert img.size == (fonts.cell_w, fonts.cell_h)
 
-    @SKIP_NO_FONTS
     def test_multiline_height(self) -> None:
         from mockterm.render import DEFAULT_FONT_SIZE, load_fonts
 
@@ -268,7 +274,6 @@ class TestRenderLines:
         img = render_lines(lines, [0, 1, 2], fonts)
         assert img.size[1] == 3 * fonts.cell_h
 
-    @SKIP_NO_FONTS
     def test_selected_subset_of_lines(self) -> None:
         from mockterm.render import DEFAULT_FONT_SIZE, load_fonts
 
@@ -282,7 +287,6 @@ class TestRenderLines:
 
 
 class TestSaveScreenshot:
-    @SKIP_NO_FONTS
     def test_creates_directory_and_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.chdir(tmp_path)
         from mockterm.render import DEFAULT_FONT_SIZE, load_fonts
@@ -300,7 +304,6 @@ class TestSaveScreenshot:
         assert "cat" in path.name
         assert "default" in path.name
 
-    @SKIP_NO_FONTS
     def test_path_is_absolute(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.chdir(tmp_path)
         from mockterm.render import DEFAULT_FONT_SIZE, load_fonts

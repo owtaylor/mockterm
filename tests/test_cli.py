@@ -356,16 +356,9 @@ class TestEscapeCodesSanitized:
 import mockterm.render as render_mod  # noqa: E402
 
 
-def _fonts_available() -> bool:
+def _reset_font_cache() -> None:
     render_mod._font_searched = False
     render_mod._cached_family = None
-    result = render_mod.find_font_family()
-    render_mod._font_searched = False
-    render_mod._cached_family = None
-    return result is not None
-
-
-SKIP_NO_FONTS = pytest.mark.skipif(not _fonts_available(), reason="no system monospace font found")
 
 
 class TestImage:
@@ -378,7 +371,6 @@ class TestImage:
         yield
         invoke("kill", "-s", "img")
 
-    @SKIP_NO_FONTS
     def test_cat_image_outputs_path(self, invoke: Callable[..., tuple[int, str]]) -> None:
         code, out = invoke("cat", "-i", "-s", "img")
         assert code == 0
@@ -388,28 +380,24 @@ class TestImage:
         assert path.exists()
         assert path.stat().st_size > 0
 
-    @SKIP_NO_FONTS
     def test_head_image_outputs_path(self, invoke: Callable[..., tuple[int, str]]) -> None:
         code, out = invoke("head", "-n", "5", "-i", "-s", "img")
         assert code == 0
         path = Path(out.strip())
         assert path.exists() and path.suffix == ".png"
 
-    @SKIP_NO_FONTS
     def test_tail_image_outputs_path(self, invoke: Callable[..., tuple[int, str]]) -> None:
         code, out = invoke("tail", "-n", "3", "-i", "-s", "img")
         assert code == 0
         path = Path(out.strip())
         assert path.exists() and path.suffix == ".png"
 
-    @SKIP_NO_FONTS
     def test_grep_image_outputs_path(self, invoke: Callable[..., tuple[int, str]]) -> None:
         code, out = invoke("grep", "-i", "-s", "img", "Hello")
         assert code == 0
         path = Path(out.strip())
         assert path.exists() and path.suffix == ".png"
 
-    @SKIP_NO_FONTS
     def test_image_filename_contains_command_and_session(self, invoke: Callable[..., tuple[int, str]]) -> None:
         _, out = invoke("cat", "-i", "-s", "img")
         name = Path(out.strip()).name
