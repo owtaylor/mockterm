@@ -29,8 +29,8 @@ jobs:
       - name: Type check (pyright)
         run: uv run pyright
 
-      - name: Install tmux
-        run: sudo apt-get install -y tmux
+      - name: Install system dependencies
+        run: sudo apt-get install -y tmux fonts-dejavu-core fontconfig
 
       - name: Test (pytest)
         run: uv run pytest -v

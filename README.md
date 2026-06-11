@@ -34,19 +34,44 @@ Send input to the terminal.  Key names follow tmux conventions:
 `Enter`, `Escape`, `C-c`, `Tab`, `Up`, `Down`, etc.
 
 ```
-mockterm cat  [-s ID] [-e]
-mockterm head [-s ID] [-e] [-n LINES]
-mockterm tail [-s ID] [-e] [-n LINES]
+mockterm cat  [-s ID] [-e|-i]
+mockterm head [-s ID] [-e|-i] [-n LINES]
+mockterm tail [-s ID] [-e|-i] [-n LINES]
 ```
 
 Retrieve screen contents.  `-e` / `--escape-codes` preserves ANSI escape
-codes (default: stripped).
+codes (default: stripped).  `-i` / `--image` renders the selected lines as a
+PNG and prints the file path — use this when you need to see exact colours,
+bold/italic styling, or box-drawing characters (e.g. htop, vim, ncdu).
+
+The image is written to `.mockterm-images/` in the current directory.  Read
+the returned path with your image tool to view it:
+
+```
+$ mockterm grep -i "error"
+/path/to/project/.mockterm-images/grep-default-x3kp9mwq.png
+```
+
+`-i` and `-e` are mutually exclusive.
 
 ```
 mockterm kill [-s ID]
 ```
 
 Kill a running session and remove it from `.mockterm`.
+
+## Font requirements
+
+`--image` requires a monospace TrueType font.  mockterm searches for **DejaVu
+Sans Mono** first, then **Liberation Mono**, using `fc-list` and a set of
+standard install paths.
+
+Install one of these packages before using `--image`:
+
+| Distro | Package |
+|--------|---------|
+| Ubuntu / Debian | `fonts-dejavu-core` or `fonts-liberation` |
+| Fedora / RHEL | `dejavu-sans-mono-fonts` or `liberation-mono-fonts` |
 
 ## OpenShell setup
 

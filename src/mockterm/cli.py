@@ -51,13 +51,13 @@ def main() -> None:
 
     \b
     Read screen contents:
-      mockterm cat   [-s SESSION] [-e]         # full screen
-      mockterm head  [-s SESSION] [-e] [-n N]  # first N lines (default 10)
-      mockterm tail  [-s SESSION] [-e] [-n N]  # last N lines  (default 10)
+      mockterm cat   [-s SESSION] [-e|-i]         # full screen
+      mockterm head  [-s SESSION] [-e|-i] [-n N]  # first N lines (default 10)
+      mockterm tail  [-s SESSION] [-e|-i] [-n N]  # last N lines  (default 10)
 
     \b
     Search screen:
-      mockterm grep [-s SESSION] [-e] [--wait] [-t SECS]
+      mockterm grep [-s SESSION] [-e|-i] [--wait] [-t SECS]
                     [-A N] [-B N] [-C N] PATTERN
         --wait  poll once/sec until match found (default timeout: 10 s)
         exits 0 on match, 1 on no-match/timeout
@@ -82,6 +82,10 @@ def main() -> None:
     FLAGS COMMON TO cat/head/tail/grep
     ───────────────────────────────────
     -e / --escape-codes   output ANSI escape codes (default: stripped).
+    -i / --image          render output as a PNG and print the file path.
+                          Writes to .mockterm-images/ in the current directory.
+                          Requires DejaVu Sans Mono or Liberation Mono.
+                          Mutually exclusive with -e.
     """
 
 
@@ -159,6 +163,13 @@ def start(session_id: str, size_str: str, command: tuple[str, ...]) -> None:
     default=False,
     help="Preserve ANSI escape codes in output.",
 )
+@click.option(
+    "-i",
+    "--image",
+    is_flag=True,
+    default=False,
+    help="Render matched lines as a PNG and print the file path.",
+)
 @click.argument("pattern")
 def grep(
     session_id: str,
@@ -169,11 +180,12 @@ def grep(
     before: int,
     context: int,
     escape_codes: bool,
+    image: bool,
 ) -> None:
     """Search the current screen contents for PATTERN.
 
     PATTERN is matched against the visible text of each line (ANSI escape
-    sequences are stripped before matching, even with -e).
+    sequences are stripped before matching, even with -e or -i).
 
     With --wait, polls the screen once per second until a match is found or
     the timeout expires. Exits with status 1 if no match is found.
@@ -183,7 +195,11 @@ def grep(
       mockterm grep "ready"
       mockterm grep --wait -t 30 "server started"
       mockterm grep -B2 -A2 "error"
+      mockterm grep -i "error"
     """
+    if image and escape_codes:
+        raise click.UsageError("--image and --escape-codes are mutually exclusive")
+
     tmux_session = require_tmux_session(session_id)
 
     # Resolve -C into before/after
@@ -194,16 +210,18 @@ def grep(
     deadline = time.monotonic() + timeout if wait else None
 
     while True:
-        screen = capture_pane(tmux_session, escape_codes=escape_codes)
+        # image mode always captures escape codes internally for colour rendering
+        screen = capture_pane(tmux_session, escape_codes=escape_codes or image)
         lines = screen.splitlines()
         indices = _grep_indices(lines, pattern, before, after)
 
         if indices:
-            if escape_codes:
-                output_lines = sanitize_sgr_slice(lines, indices)
+            if image:
+                print(_render_and_save(lines, indices, "grep", session_id))
+            elif escape_codes:
+                print("\n".join(sanitize_sgr_slice(lines, indices)))
             else:
-                output_lines = [lines[i] for i in indices]
-            print("\n".join(output_lines))
+                print("\n".join(lines[i] for i in indices))
             sys.exit(0)
 
         if deadline is None or time.monotonic() >= deadline:
@@ -270,15 +288,24 @@ def send_keys(session_id: str, keys: tuple[str, ...]) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _render_and_save(all_lines: list[str], selected: list[int], command: str, session_id: str) -> str:
+    # Imported lazily so PIL is not loaded when --image is not used.
+    from mockterm.render import render_and_save
+
+    return render_and_save(all_lines, selected, command, session_id)
+
+
 def _output_screen(
     session_id: str,
     escape_codes: bool,
     n_lines: int | None,
     from_end: bool,
+    image: bool = False,
+    command_name: str = "cat",
 ) -> None:
     """Shared implementation for cat, head, and tail."""
     tmux_session = require_tmux_session(session_id)
-    screen = capture_pane(tmux_session, escape_codes=escape_codes)
+    screen = capture_pane(tmux_session, escape_codes=escape_codes or image)
     lines = screen.splitlines()
 
     total = len(lines)
@@ -289,56 +316,64 @@ def _output_screen(
     else:
         selected = list(range(min(n_lines, total)))
 
-    if escape_codes:
-        output_lines = sanitize_sgr_slice(lines, selected)
+    if image:
+        print(_render_and_save(lines, selected, command_name, session_id))
+    elif escape_codes:
+        print("\n".join(sanitize_sgr_slice(lines, selected)))
     else:
-        output_lines = [lines[i] for i in selected]
-
-    print("\n".join(output_lines))
+        print("\n".join(lines[i] for i in selected))
 
 
-@main.command()
-@click.option("-s", "--session", "session_id", default=DEFAULT_ID, show_default=True, help="Session ID.")
-@click.option(
+_IMAGE_OPTION = click.option(
+    "-i",
+    "--image",
+    is_flag=True,
+    default=False,
+    help="Render output as a PNG and print the file path.",
+)
+
+_ESCAPE_OPTION = click.option(
     "-e",
     "--escape-codes",
     is_flag=True,
     default=False,
     help="Preserve ANSI escape codes in output.",
 )
-def cat(session_id: str, escape_codes: bool) -> None:
+
+
+@main.command()
+@click.option("-s", "--session", "session_id", default=DEFAULT_ID, show_default=True, help="Session ID.")
+@_ESCAPE_OPTION
+@_IMAGE_OPTION
+def cat(session_id: str, escape_codes: bool, image: bool) -> None:
     """Print the full current screen contents."""
-    _output_screen(session_id, escape_codes, None, False)
+    if image and escape_codes:
+        raise click.UsageError("--image and --escape-codes are mutually exclusive")
+    _output_screen(session_id, escape_codes, None, False, image, "cat")
 
 
 @main.command()
 @click.option("-s", "--session", "session_id", default=DEFAULT_ID, show_default=True, help="Session ID.")
 @click.option("-n", "n_lines", type=int, default=10, show_default=True, help="Number of lines to print.")
-@click.option(
-    "-e",
-    "--escape-codes",
-    is_flag=True,
-    default=False,
-    help="Preserve ANSI escape codes in output.",
-)
-def head(session_id: str, n_lines: int, escape_codes: bool) -> None:
+@_ESCAPE_OPTION
+@_IMAGE_OPTION
+def head(session_id: str, n_lines: int, escape_codes: bool, image: bool) -> None:
     """Print the first N lines of the current screen."""
-    _output_screen(session_id, escape_codes, n_lines, False)
+    if image and escape_codes:
+        raise click.UsageError("--image and --escape-codes are mutually exclusive")
+    _output_screen(session_id, escape_codes, n_lines, False, image, "head")
 
 
 @main.command()
 @click.option("-s", "--session", "session_id", default=DEFAULT_ID, show_default=True, help="Session ID.")
 @click.option("-n", "n_lines", type=int, default=10, show_default=True, help="Number of lines to print.")
-@click.option(
-    "-e",
-    "--escape-codes",
-    is_flag=True,
-    default=False,
-    help="Preserve ANSI escape codes in output.",
-)
-def tail(session_id: str, n_lines: int, escape_codes: bool) -> None:
+@_ESCAPE_OPTION
+@_IMAGE_OPTION
+def tail(session_id: str, n_lines: int, escape_codes: bool, image: bool) -> None:
     """Print the last N lines of the current screen."""
-    _output_screen(session_id, escape_codes, n_lines, True)
+    if image and escape_codes:
+        raise click.UsageError("--image and --escape-codes are mutually exclusive")
+    _output_screen(session_id, escape_codes, n_lines, True, image, "tail")
 
 
 # ---------------------------------------------------------------------------
