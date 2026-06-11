@@ -1,4 +1,5 @@
 .mockterm
+.mockterm-images/
 .venv/
 __pycache__/
 *.pyc

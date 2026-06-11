@@ -347,3 +347,81 @@ class TestEscapeCodesSanitized:
         # '94' appears in escape codes in the output; grep should NOT match it.
         code, _ = invoke("grep", "-e", "-s", "vi-sgr", r"^\d+$")
         assert code == 1  # no line whose visible text is purely digits
+
+
+# ---------------------------------------------------------------------------
+# Integration: --image flag
+# ---------------------------------------------------------------------------
+
+import mockterm.render as render_mod  # noqa: E402
+
+
+def _fonts_available() -> bool:
+    render_mod._font_searched = False
+    render_mod._cached_family = None
+    result = render_mod.find_font_family()
+    render_mod._font_searched = False
+    render_mod._cached_family = None
+    return result is not None
+
+
+SKIP_NO_FONTS = pytest.mark.skipif(not _fonts_available(), reason="no system monospace font found")
+
+
+class TestImage:
+    """Verify that --image writes a PNG and prints its absolute path."""
+
+    @pytest.fixture(autouse=True)
+    def _start_session(self, invoke: Callable[..., tuple[int, str]]) -> Generator:
+        invoke("start", "-s", "img", "sh", "-c", "printf '\\033[32mHello\\033[0m world\\n'; sleep 3600")
+        time.sleep(0.5)
+        yield
+        invoke("kill", "-s", "img")
+
+    @SKIP_NO_FONTS
+    def test_cat_image_outputs_path(self, invoke: Callable[..., tuple[int, str]]) -> None:
+        code, out = invoke("cat", "-i", "-s", "img")
+        assert code == 0
+        path = Path(out.strip())
+        assert path.is_absolute()
+        assert path.suffix == ".png"
+        assert path.exists()
+        assert path.stat().st_size > 0
+
+    @SKIP_NO_FONTS
+    def test_head_image_outputs_path(self, invoke: Callable[..., tuple[int, str]]) -> None:
+        code, out = invoke("head", "-n", "5", "-i", "-s", "img")
+        assert code == 0
+        path = Path(out.strip())
+        assert path.exists() and path.suffix == ".png"
+
+    @SKIP_NO_FONTS
+    def test_tail_image_outputs_path(self, invoke: Callable[..., tuple[int, str]]) -> None:
+        code, out = invoke("tail", "-n", "3", "-i", "-s", "img")
+        assert code == 0
+        path = Path(out.strip())
+        assert path.exists() and path.suffix == ".png"
+
+    @SKIP_NO_FONTS
+    def test_grep_image_outputs_path(self, invoke: Callable[..., tuple[int, str]]) -> None:
+        code, out = invoke("grep", "-i", "-s", "img", "Hello")
+        assert code == 0
+        path = Path(out.strip())
+        assert path.exists() and path.suffix == ".png"
+
+    @SKIP_NO_FONTS
+    def test_image_filename_contains_command_and_session(self, invoke: Callable[..., tuple[int, str]]) -> None:
+        _, out = invoke("cat", "-i", "-s", "img")
+        name = Path(out.strip()).name
+        assert "cat" in name
+        assert "img" in name
+
+    def test_image_and_escape_codes_are_exclusive(self, invoke: Callable[..., tuple[int, str]]) -> None:
+        code, out = invoke("cat", "-i", "-e", "-s", "img")
+        assert code != 0
+        assert "mutually exclusive" in out
+
+    def test_image_and_escape_codes_exclusive_grep(self, invoke: Callable[..., tuple[int, str]]) -> None:
+        code, out = invoke("grep", "-i", "-e", "-s", "img", "Hello")
+        assert code != 0
+        assert "mutually exclusive" in out
